@@ -1,0 +1,109 @@
+version: '3.7'
+
+services:
+  kratos-migrate:
+    image: oryd/kratos:v0.13.0
+    environment:
+      - DSN=postgres://postgres:1972@host.docker.internal:5432/kratos?sslmode=disable
+    volumes:
+      - type: volume
+        source: kratos-postgres
+        target: /var/lib/postgresql
+        read_only: false
+      - type: bind
+        source: ./email-password
+        target: /etc/config/kratos
+    command: -c /etc/config/kratos/kratos.yml migrate sql -e --yes
+    restart: on-failure
+    networks:
+      - intranet
+
+  kratos:
+    depends_on:
+      - kratos-migrate
+    image: oryd/kratos:v0.13.0
+    ports:
+      - '4433:4433' # public
+      - '4434:4434' # admin
+    restart: unless-stopped
+    environment:
+      - DSN=postgres://postgres:1972@host.docker.internal:5432/kratos?sslmode=disable
+      - LOG_LEVEL=trace
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+    volumes:
+      - type: volume
+        source: kratos-postgres
+        target: /var/lib/postgresql
+        read_only: false
+      - type: bind
+        source: ./email-password
+        target: /etc/config/kratos
+    networks:
+      - intranet
+
+  mailslurper:
+    image: oryd/mailslurper:latest-smtps
+    ports:
+      - '4436:4436'
+      - '4437:4437'
+    networks:
+      - intranet
+
+  hydra-migrate:
+    image: oryd/hydra:v2.2.0-rc.3
+    environment:
+      - DSN=postgres://postgres:1972@host.docker.internal:5432/hydra?sslmode=disable&max_conns=20&max_idle_conns=4
+    command: migrate -c /etc/config/hydra/hydra.yml sql -e --yes
+    volumes:
+      - type: volume
+        source: hydra-postgres
+        target: /var/lib/postgresql
+        read_only: false
+      - type: bind
+        source: ./5-min
+        target: /etc/config/hydra
+    restart: on-failure
+    networks:
+      - intranet
+
+  hydra:
+    image: oryd/hydra:v2.2.0-rc.3
+    ports:
+      - "4444:4444" # Public port
+      - "4445:4445" # Admin port
+      - "5555:5555" # Port for hydra token user
+    command: serve -c /etc/config/hydra/hydra.yml all --dev
+    volumes:
+      - type: volume
+        source: hydra-postgres
+        target: /var/lib/postgresql
+        read_only: false
+      - type: bind
+        source: ./5-min
+        target: /etc/config/hydra
+    environment:
+      - DSN=postgres://postgres:1972@host.docker.internal:5432/hydra?sslmode=disable&max_conns=20&max_idle_conns=4
+    restart: unless-stopped
+    depends_on:
+      - hydra-migrate
+    networks:
+      - intranet
+
+  auth-poc-web:
+    build:
+      context: ./ory-poc
+    volumes: 
+     - ./ory-poc:/usr/src/app
+     - /usr/src/app/node_modules
+    ports:
+      - "3000:3000"
+    networks:
+      - intranet
+    restart: on-failure
+
+networks:
+  intranet:
+
+volumes:
+  kratos-postgres:
+  hydra-postgres:
